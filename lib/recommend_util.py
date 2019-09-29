@@ -419,6 +419,89 @@ def split_train_validation_leave_one_out_user_wise(URM_train, verbose=True, at_l
 
     return URM_train, URM_validation
 
+def split_train_validation_cold_start_user_wise(URM_train, full_train_percentage = 0.0, cold_items=1 ,verbose=True):
+    # ensure to use csr matrix or we get big problem
+    URM_train = URM_train.tocsr()
+
+    num_users, num_items = URM_train.shape
+
+    URM_train_builder = IncrementalSparseMatrix(n_rows=num_users, n_cols=num_items)
+    URM_validation_builder = IncrementalSparseMatrix(n_rows=num_users, n_cols=num_items)
+
+    user_no_item_train = 0
+    user_no_item_validation = 0
+
+    # if we split two time train-test and train-validation we could get users with no items in the second split,
+    # in order to get good test with enough non empty users, get the random users within the users with at least <cold_items>
+    nnz_per_row = URM_train.getnnz(axis=1)
+
+    users_enough_items = np.where(nnz_per_row > cold_items)[0]
+    users_no_enough_items = np.where(nnz_per_row <= cold_items)[0]
+
+    np.random.shuffle(users_enough_items)
+
+    n_train_users = round(len(users_enough_items)*full_train_percentage)
+
+    print("Users enough items: {}".format(len(users_enough_items)))
+    print("Users no enough items: {}".format(len(users_no_enough_items)))
+
+    # create full train part without coldstart
+    for user_id in np.concatenate((users_enough_items[0:n_train_users], users_no_enough_items), axis=0):
+        start_pos = URM_train.indptr[user_id]
+        end_pos = URM_train.indptr[user_id + 1]
+        user_profile_items = URM_train.indices[start_pos:end_pos]
+        user_profile_ratings = URM_train.data[start_pos:end_pos]
+        user_profile_length = len(user_profile_items)
+        URM_train_builder.add_data_lists([user_id] * user_profile_length, user_profile_items, user_profile_ratings)
+
+
+    # create test + train for the cold start users
+    for user_id in users_enough_items[n_train_users:]:
+
+        start_pos = URM_train.indptr[user_id]
+        end_pos = URM_train.indptr[user_id+1]
+
+
+        user_profile_items = URM_train.indices[start_pos:end_pos]
+        user_profile_ratings = URM_train.data[start_pos:end_pos]
+        user_profile_length = len(user_profile_items)
+
+        n_train_items = min(cold_items, user_profile_length)
+
+        if n_train_items == len(user_profile_items) and n_train_items > 1:
+            n_train_items -= 1
+
+        indices_for_sampling = np.arange(0, user_profile_length, dtype=np.int)
+        np.random.shuffle(indices_for_sampling)
+
+        train_items = user_profile_items[indices_for_sampling[0:n_train_items]]
+        train_ratings = user_profile_ratings[indices_for_sampling[0:n_train_items]]
+
+        validation_items = user_profile_items[indices_for_sampling[n_train_items:]]
+        validation_ratings = user_profile_ratings[indices_for_sampling[n_train_items:]]
+
+        if len(train_items) == 0:
+            if verbose: print("User {} has 0 train items".format(user_id))
+            user_no_item_train += 1
+
+        if len(validation_items) == 0:
+            if verbose: print("User {} has 0 validation items".format(user_id))
+            user_no_item_validation += 1
+
+        URM_train_builder.add_data_lists([user_id]*len(train_items), train_items, train_ratings)
+        URM_validation_builder.add_data_lists([user_id]*len(validation_items), validation_items, validation_ratings)
+
+    if user_no_item_train != 0:
+        print("Warning split: {} users with 0 train items ({} total users)".format(user_no_item_train, URM_train.shape[0]))
+    if user_no_item_validation != 0:
+        print("Warning split: {} users with 0 validation items ({} total users)".format(user_no_item_validation, URM_train.shape[0]))
+
+    URM_train = URM_train_builder.get_SparseMatrix()
+    URM_validation = URM_validation_builder.get_SparseMatrix()
+
+    return URM_train, URM_validation
+
+
 def ndcg(ranked_list, pos_items, relevance=None, at=None):
 
     if relevance is None:
