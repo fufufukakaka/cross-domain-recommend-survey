@@ -1,3 +1,5 @@
 data/*
-lib/.ipynb_checkpoints/*
+.ipynb_checkpoints/*
 lib/__pycache__/*
+output
+.vscode
